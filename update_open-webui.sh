@@ -181,28 +181,3 @@ fi
 
 log "=== 完成：Open WebUI 已更新，备份已保留最近 ${RETENTION} 个版本 ==="
 
-cat <<'EOF'
-
-[恢复示例]
-1) 恢复数据目录（把某个版本的 data/ 同步回 DATA_DIR）
-   docker compose stop open-webui
-   rsync -aH --delete ./_backupsets/backup-YYYYmmdd-HHMMSS/data/ /home/lieyan/open-webui/data/
-   docker compose up -d open-webui
-
-2) 恢复 Postgres（pg_restore，建议停 WebUI 避免写入）
-   docker compose stop open-webui
-
-   # 把 dump 临时拷进 postgres 容器再 restore（最稳）
-   zstd -d -c ./_backupsets/backup-YYYYmmdd-HHMMSS/db/postgres.dump.zst > /tmp/postgres.dump
-   docker compose cp /tmp/postgres.dump postgres:/tmp/postgres.dump
-
-   # 还原（会覆盖同名对象；需要时可加/减参数）
-   docker compose exec -T postgres sh -lc 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists /tmp/postgres.dump'
-
-   # （可选）还原角色/权限等 globals（如果你有自建角色）
-   # zstd -d -c ./_backupsets/backup-YYYYmmdd-HHMMSS/db/postgres-globals.sql.zst | docker compose exec -T postgres sh -lc 'psql -U "$POSTGRES_USER" -d postgres'
-
-   docker compose up -d open-webui
-
-EOF
-
