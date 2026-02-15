@@ -12,6 +12,34 @@
 
 set -euo pipefail
 
+die() { echo "❌ $*" >&2; exit 1; }
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+sha256_file() {
+  local f="$1"
+  if have_cmd sha256sum; then
+    sha256sum "$f" | awk '{print $1}'
+  elif have_cmd shasum; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  else
+    die "缺少 sha256 工具（需要 sha256sum 或 shasum）"
+  fi
+}
+path_abs() {
+  local p="$1"
+  if have_cmd realpath; then
+    realpath "$p"
+    return
+  fi
+  if readlink -f / >/dev/null 2>&1; then
+    readlink -f "$p"
+    return
+  fi
+  local dir base
+  dir="$(cd "$(dirname "$p")" && pwd -P)"
+  base="$(basename "$p")"
+  echo "${dir}/${base}"
+}
+
 ### ===== 可配置项（可通过环境变量覆盖） =====
 # GitHub 仓库 Raw 基础前缀（末尾不要带斜杠）
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/lieyanc/open-webui_scripts/master}"
@@ -35,6 +63,8 @@ SELF_MODE="${SELF_MODE:-0755}"
 
 # 业务脚本安装后是否**立即执行更新**（也可通过 --run 开启）
 AUTO_RUN_AFTER_UPDATE="${AUTO_RUN_AFTER_UPDATE:-false}"
+# 生产建议开启：若目标文件没有同名 .sha256，则直接失败
+REQUIRE_CHECKSUM="${REQUIRE_CHECKSUM:-false}"
 ### =========================================
 
 # 解析参数
@@ -58,7 +88,7 @@ while [[ $# -gt 0 ]]; do
 
 环境变量(可覆盖默认):
   REPO_RAW_BASE, PULL_NAME, UPDATE_NAME, DEST_DIR, UPDATE_DST, SELF_DST
-  UPDATE_MODE, SELF_MODE, AUTO_RUN_AFTER_UPDATE
+  UPDATE_MODE, SELF_MODE, AUTO_RUN_AFTER_UPDATE, REQUIRE_CHECKSUM
 
 示例:
   curl -fsSL <RAW>/pull-update-script.sh | bash -s -- --install
@@ -76,24 +106,38 @@ if ! $DO_INSTALL && ! $DO_UPDATE; then
   DO_UPDATE=true
 fi
 
+need_bins=(curl install awk mktemp)
+for b in "${need_bins[@]}"; do
+  have_cmd "$b" || die "缺少依赖命令：$b"
+done
+
 mkdir -p "$DEST_DIR"
 
 # 工具函数：下载 + 可选 sha256 校验 + 原子替换
 download_and_install() {
   local url="$1" dst="$2" mode="$3"
-  local tmp; tmp="$(mktemp)"
+  local tmp expected actual sha_file
+  tmp="$(mktemp)"
+  sha_file="${tmp}.sha256"
   curl -fsSL "$url" -o "$tmp"
 
   # 若存在同名 .sha256 则校验
-  if curl -fsSL "${url}.sha256" -o "${tmp}.sha256" 2>/dev/null; then
-    expected="$(awk '{print $1}' "${tmp}.sha256")"
-    actual="$(sha256sum "$tmp" | awk '{print $1}')"
+  if curl -fsSL "${url}.sha256" -o "${sha_file}" 2>/dev/null; then
+    expected="$(awk 'NR==1 {print $1}' "${sha_file}")"
+    [[ -n "${expected}" ]] || {
+      rm -f "$tmp" "${sha_file}"
+      die "校验文件格式无效：${url}.sha256"
+    }
+    actual="$(sha256_file "$tmp")"
     if [[ "$expected" != "$actual" ]]; then
       echo "❌ 校验失败：$url（期望 $expected，实际 $actual）"
-      rm -f "$tmp" "${tmp}.sha256"
+      rm -f "$tmp" "${sha_file}"
       exit 1
     fi
-    rm -f "${tmp}.sha256"
+    rm -f "${sha_file}"
+  elif [[ "${REQUIRE_CHECKSUM}" == "true" ]]; then
+    rm -f "$tmp"
+    die "缺少校验文件：${url}.sha256（REQUIRE_CHECKSUM=true）"
   fi
 
   install -m "$mode" "$tmp" "$dst"
@@ -107,9 +151,14 @@ self_update() {
   download_and_install "$self_url" "$SELF_DST" "$SELF_MODE"
 
   # 如果当前执行路径不是目标路径，提示之后从目标路径重新执行更稳妥
-  local current="$(readlink -f "${BASH_SOURCE[0]}")" || current="$0"
-  # shellcheck disable=SC2012
-  if [[ "$(readlink -f "$SELF_DST")" != "$(readlink -f "$current")" ]]; then
+  local current current_abs self_abs
+  current="${BASH_SOURCE[0]:-$0}"
+  if [[ "$current" != /* ]] && have_cmd "$current"; then
+    current="$(command -v "$current")"
+  fi
+  current_abs="$(path_abs "$current")"
+  self_abs="$(path_abs "$SELF_DST")"
+  if [[ "$self_abs" != "$current_abs" ]]; then
     echo "ℹ️ 提示：当前执行文件不是安装目标（$SELF_DST），后续请从 $SELF_DST 运行。"
   fi
 }

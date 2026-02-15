@@ -29,11 +29,50 @@ curl -fsSL https://raw.githubusercontent.com/lieyanc/open-webui_scripts/master/p
 
 ## 依赖
 
-`docker`、`curl`、`rsync`、`zstd`
+`docker`、`curl`、`rsync`、`zstd`、`flock`
 
 ## 配置
 
 两个脚本均支持通过环境变量或 `.env` 文件覆盖默认配置，详见脚本内注释。
+
+## 生产环境建议
+
+1. 明确配置关键变量（尤其是 `DATA_DIR`、`HOST_PORT`、服务名）：
+
+```bash
+cat > .env <<'EOF'
+DOCKER_COMPOSE_CMD=docker compose
+SERVICE_WEBUI=open-webui
+SERVICE_DB=postgres
+DATA_DIR=/home/lieyan/open-webui/data
+HOST_PORT=23995
+HEALTH_PATH=/health
+RETENTION=7
+REQUIRE_DATA_DIR=1
+EOF
+```
+
+2. 上线前先做预检（不执行更新）：
+
+```bash
+./update_open-webui.sh --check
+```
+
+3. 启用脚本完整性校验（要求仓库提供 `.sha256` 文件）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lieyanc/open-webui_scripts/master/pull-update-script.sh \
+  | env REQUIRE_CHECKSUM=true bash -s -- --install
+```
+
+4. 修改脚本后同步更新哈希文件：
+
+```bash
+shasum -a 256 pull-update-script.sh | awk '{print $1"  pull-update-script.sh"}' > pull-update-script.sh.sha256
+shasum -a 256 update_open-webui.sh | awk '{print $1"  update_open-webui.sh"}' > update_open-webui.sh.sha256
+```
+
+> 注意：`update_open-webui.sh` 会 `source .env`，请确保 `.env` 仅包含受信任内容。
 
 ## 恢复示例
 
