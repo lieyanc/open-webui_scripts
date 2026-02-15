@@ -86,7 +86,13 @@ download_and_install() {
 
   # 若存在同名 .sha256 则校验
   if curl -fsSL "${url}.sha256" -o "${tmp}.sha256" 2>/dev/null; then
-    sha256sum -c --status "${tmp}.sha256" || { echo "❌ 校验失败：$url"; rm -f "$tmp" "${tmp}.sha256"; exit 1; }
+    expected="$(awk '{print $1}' "${tmp}.sha256")"
+    actual="$(sha256sum "$tmp" | awk '{print $1}')"
+    if [[ "$expected" != "$actual" ]]; then
+      echo "❌ 校验失败：$url（期望 $expected，实际 $actual）"
+      rm -f "$tmp" "${tmp}.sha256"
+      exit 1
+    fi
     rm -f "${tmp}.sha256"
   fi
 

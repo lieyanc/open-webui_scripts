@@ -7,6 +7,14 @@ cd "$(dirname "$0")"
 
 log() { echo "[$(date +'%F %T')] $*"; }
 
+# 防止并发执行（flock）
+LOCK_FILE="${LOCK_FILE:-/tmp/update_open-webui.lock}"
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  log "❌ 另一个实例正在运行（锁文件：${LOCK_FILE}），退出"
+  exit 1
+fi
+
 need_bins=(docker curl rsync zstd)
 for b in "${need_bins[@]}"; do
   command -v "$b" >/dev/null 2>&1 || { echo "缺少依赖：$b"; exit 1; }
@@ -46,13 +54,24 @@ PRUNE_IMAGES="${PRUNE_IMAGES:-0}"    # 1=成功后 prune；0=不 prune（更利�
 
 TS="$(date +'%Y%m%d-%H%M%S')"
 SET_DIR="${BACKUP_ROOT}/backup-${TS}"
+BACKUP_COMPLETE=false
+
+# 中断时清理不完整的备份目录
+cleanup() {
+  if ! $BACKUP_COMPLETE && [[ -d "${SET_DIR}" ]]; then
+    log "⚠️ 中断，清理不完整的备份目录：${SET_DIR}"
+    rm -rf "${SET_DIR}"
+  fi
+}
+trap cleanup EXIT
+
+# 先找上一个备份版本（用于硬链接增量），必须在创建新目录之前
+LAST_SET="$(ls -1dt "${BACKUP_ROOT}"/backup-* 2>/dev/null | head -n1 || true)"
+
 mkdir -p "${SET_DIR}/"{data,db,meta}
 
 log "=== 开始：备份 + 更新 Open WebUI ==="
 log "备份目录：${SET_DIR}"
-
-# 找上一个备份版本（用于硬链接增量）
-LAST_SET="$(ls -1dt "${BACKUP_ROOT}"/backup-* 2>/dev/null | head -n1 || true)"
 
 # 0) 确保 DB 服务在（pg_dump 需要容器可用）
 log "确保数据库服务已启动：${SERVICE_DB}"
@@ -70,7 +89,7 @@ if [[ -d "${DATA_DIR}" ]]; then
 
   if [[ -n "${LAST_SET}" && -d "${LAST_SET}/data" ]]; then
     # 用绝对路径，避免 rsync link-dest 路径坑
-    link_dest="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${LAST_SET}/data")"
+    link_dest="$(realpath "${LAST_SET}/data")"
     rsync_opts+=(--link-dest="${link_dest}")
     log "启用增量硬链接（link-dest）：${link_dest}"
   else
@@ -117,6 +136,7 @@ log "✅ 备份完成："
 log " - 数据快照：${SET_DIR}/data"
 log " - DB dump： ${DB_DUMP}"
 log " - Globals： ${GLOBALS_DUMP}"
+BACKUP_COMPLETE=true
 
 # 4) 轮转：只保留最近 RETENTION 个版本
 log "轮转备份：仅保留最近 ${RETENTION} 个版本"
@@ -165,7 +185,7 @@ if [[ "${HEALTH_OK}" -ne 1 ]]; then
   log ""
   log "你已经有可用备份（${SET_DIR}）。建议回滚方式："
   log "1) 先停止：  $DOCKER_COMPOSE down"
-  log "2) 用备份恢复数据+数据库（见脚本末尾“恢复示例”段落）"
+  log "2) 用备份恢复数据+数据库（见 README.md 中的「恢复示例」）"
   exit 1
 fi
 
