@@ -70,6 +70,7 @@ HEALTH_PATH="${HEALTH_PATH:-/health}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 HEALTH_CURL_MAX_TIME="${HEALTH_CURL_MAX_TIME:-5}" # 单次健康检查请求超时（秒）
 ALLOW_ROOT_FALLBACK="${ALLOW_ROOT_FALLBACK:-0}"   # 1=允许 / 回退判活，0=仅检查 HEALTH_PATH
+DB_READY_TIMEOUT="${DB_READY_TIMEOUT:-60}"        # DB 启动后等待就绪的最长秒数
 
 # 你的宿主机数据目录（按你 compose 里的 volumes）
 DATA_DIR="${DATA_DIR:-/home/lieyan/open-webui/data}"
@@ -89,6 +90,7 @@ REQUIRE_DATA_DIR="${REQUIRE_DATA_DIR:-1}" # 1=数据目录不存在则中止；0
 is_pos_int "${HEALTH_TIMEOUT}" || die "HEALTH_TIMEOUT 必须是正整数，当前：${HEALTH_TIMEOUT}"
 is_pos_int "${RETENTION}" || die "RETENTION 必须是正整数，当前：${RETENTION}"
 is_pos_int "${HEALTH_CURL_MAX_TIME}" || die "HEALTH_CURL_MAX_TIME 必须是正整数，当前：${HEALTH_CURL_MAX_TIME}"
+is_pos_int "${DB_READY_TIMEOUT}" || die "DB_READY_TIMEOUT 必须是正整数，当前：${DB_READY_TIMEOUT}"
 if [[ "${ALLOW_ROOT_FALLBACK}" != "0" && "${ALLOW_ROOT_FALLBACK}" != "1" ]]; then
   die "ALLOW_ROOT_FALLBACK 只能是 0 或 1，当前：${ALLOW_ROOT_FALLBACK}"
 fi
@@ -110,6 +112,21 @@ if $DO_CHECK; then
   log "✅ 预检通过：依赖、compose 配置、服务名、关键参数均正常"
   exit 0
 fi
+
+wait_for_db_ready() {
+  local deadline ready
+  ready=0
+  deadline=$(( $(date +%s) + DB_READY_TIMEOUT ))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if compose exec -T "${SERVICE_DB}" sh -lc \
+      'if command -v pg_isready >/dev/null 2>&1; then pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; else psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select 1" >/dev/null 2>&1; fi'; then
+      ready=1
+      break
+    fi
+    sleep 2
+  done
+  [[ "$ready" -eq 1 ]]
+}
 
 TS="$(date +'%Y%m%d-%H%M%S')"
 SET_DIR="${BACKUP_ROOT}/backup-${TS}"
@@ -135,6 +152,8 @@ log "备份目录：${SET_DIR}"
 # 0) 确保 DB 服务在（pg_dump 需要容器可用）
 log "确保数据库服务已启动：${SERVICE_DB}"
 compose up -d "${SERVICE_DB}" >/dev/null
+log "等待数据库就绪（最多 ${DB_READY_TIMEOUT}s）"
+wait_for_db_ready || die "数据库在 ${DB_READY_TIMEOUT}s 内未就绪，已中止以避免无效备份"
 
 # 1) 数据目录：rsync 硬链接快照（增量、易恢复）
 if [[ ! -d "${DATA_DIR}" ]]; then

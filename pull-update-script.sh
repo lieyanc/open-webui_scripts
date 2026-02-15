@@ -106,6 +106,12 @@ if ! $DO_INSTALL && ! $DO_UPDATE; then
   DO_UPDATE=true
 fi
 
+# 若同时指定 install + update，安装流程已包含更新，避免重复下载/覆盖
+if $DO_INSTALL && $DO_UPDATE; then
+  echo "ℹ️ 同时指定 --install 和 --update：安装流程已包含更新，跳过重复更新步骤"
+  DO_UPDATE=false
+fi
+
 need_bins=(curl install awk mktemp)
 for b in "${need_bins[@]}"; do
   have_cmd "$b" || die "缺少依赖命令：$b"
@@ -130,7 +136,7 @@ download_and_install() {
     }
     actual="$(sha256_file "$tmp")"
     if [[ "$expected" != "$actual" ]]; then
-      echo "❌ 校验失败：$url（期望 $expected，实际 $actual）"
+      echo "❌ 校验失败：${url}（期望 ${expected}，实际 ${actual}）"
       rm -f "$tmp" "${sha_file}"
       exit 1
     fi
@@ -142,7 +148,7 @@ download_and_install() {
 
   install -m "$mode" "$tmp" "$dst"
   rm -f "$tmp"
-  echo "✅ 已更新 $(basename "$dst") -> $dst"
+  echo "✅ 已更新 $(basename "$dst") -> ${dst}"
 }
 
 # 自更新：用仓库中的版本覆盖当前脚本目标路径（SELF_DST）
@@ -159,7 +165,7 @@ self_update() {
   current_abs="$(path_abs "$current")"
   self_abs="$(path_abs "$SELF_DST")"
   if [[ "$self_abs" != "$current_abs" ]]; then
-    echo "ℹ️ 提示：当前执行文件不是安装目标（$SELF_DST），后续请从 $SELF_DST 运行。"
+    echo "ℹ️ 提示：当前执行文件不是安装目标（${SELF_DST}），后续请从 ${SELF_DST} 运行。"
   fi
 }
 
@@ -189,4 +195,4 @@ if $DO_RUN || { [[ "$AUTO_RUN_AFTER_UPDATE" == "true" ]] && ($DO_INSTALL || $DO_
   exec "$UPDATE_DST"
 fi
 
-echo "🎉 完成。脚本在：$SELF_DST；业务更新脚本在：$UPDATE_DST"
+echo "🎉 完成。脚本在：${SELF_DST}；业务更新脚本在：${UPDATE_DST}"
