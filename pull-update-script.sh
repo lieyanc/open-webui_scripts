@@ -8,22 +8,10 @@
 #   ./pull-update-script.sh --update
 #   ./pull-update-script.sh --run
 #
-# 重要：若提供同名的 .sha256 文件（追加在 URL 后缀 .sha256），将自动做完整性校验
-
 set -euo pipefail
 
 die() { echo "❌ $*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
-sha256_file() {
-  local f="$1"
-  if have_cmd sha256sum; then
-    sha256sum "$f" | awk '{print $1}'
-  elif have_cmd shasum; then
-    shasum -a 256 "$f" | awk '{print $1}'
-  else
-    die "缺少 sha256 工具（需要 sha256sum 或 shasum）"
-  fi
-}
 path_abs() {
   local p="$1"
   if have_cmd realpath; then
@@ -63,8 +51,6 @@ SELF_MODE="${SELF_MODE:-0755}"
 
 # 业务脚本安装后是否**立即执行更新**（也可通过 --run 开启）
 AUTO_RUN_AFTER_UPDATE="${AUTO_RUN_AFTER_UPDATE:-false}"
-# 生产建议开启：若目标文件没有同名 .sha256，则直接失败
-REQUIRE_CHECKSUM="${REQUIRE_CHECKSUM:-false}"
 ### =========================================
 
 # 解析参数
@@ -83,12 +69,12 @@ while [[ $# -gt 0 ]]; do
 
 说明:
   --install  首次安装：创建目录、拉取两个脚本并赋权（含自更新）
-  --update   更新：拉取并替换本脚本与 update_open-webui.sh（含校验）
+  --update   更新：拉取并替换本脚本与 update_open-webui.sh
   --run      在完成安装/更新后，立即执行 update_open-webui.sh
 
 环境变量(可覆盖默认):
   REPO_RAW_BASE, PULL_NAME, UPDATE_NAME, DEST_DIR, UPDATE_DST, SELF_DST
-  UPDATE_MODE, SELF_MODE, AUTO_RUN_AFTER_UPDATE, REQUIRE_CHECKSUM
+  UPDATE_MODE, SELF_MODE, AUTO_RUN_AFTER_UPDATE
 
 示例:
   curl -fsSL <RAW>/pull-update-script.sh | bash -s -- --install
@@ -112,39 +98,19 @@ if $DO_INSTALL && $DO_UPDATE; then
   DO_UPDATE=false
 fi
 
-need_bins=(curl install awk mktemp)
+need_bins=(curl install mktemp)
 for b in "${need_bins[@]}"; do
   have_cmd "$b" || die "缺少依赖命令：$b"
 done
 
 mkdir -p "$DEST_DIR"
 
-# 工具函数：下载 + 可选 sha256 校验 + 原子替换
+# 工具函数：下载 + 原子替换
 download_and_install() {
   local url="$1" dst="$2" mode="$3"
-  local tmp expected actual sha_file
+  local tmp
   tmp="$(mktemp)"
-  sha_file="${tmp}.sha256"
   curl -fsSL "$url" -o "$tmp"
-
-  # 若存在同名 .sha256 则校验
-  if curl -fsSL "${url}.sha256" -o "${sha_file}" 2>/dev/null; then
-    expected="$(awk 'NR==1 {print $1}' "${sha_file}")"
-    [[ -n "${expected}" ]] || {
-      rm -f "$tmp" "${sha_file}"
-      die "校验文件格式无效：${url}.sha256"
-    }
-    actual="$(sha256_file "$tmp")"
-    if [[ "$expected" != "$actual" ]]; then
-      echo "❌ 校验失败：${url}（期望 ${expected}，实际 ${actual}）"
-      rm -f "$tmp" "${sha_file}"
-      exit 1
-    fi
-    rm -f "${sha_file}"
-  elif [[ "${REQUIRE_CHECKSUM}" == "true" ]]; then
-    rm -f "$tmp"
-    die "缺少校验文件：${url}.sha256（REQUIRE_CHECKSUM=true）"
-  fi
 
   install -m "$mode" "$tmp" "$dst"
   rm -f "$tmp"

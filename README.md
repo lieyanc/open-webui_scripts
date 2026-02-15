@@ -58,20 +58,6 @@ EOF
 ./update_open-webui.sh --check
 ```
 
-3. 启用脚本完整性校验（要求仓库提供 `.sha256` 文件）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lieyanc/open-webui_scripts/master/pull-update-script.sh \
-  | env REQUIRE_CHECKSUM=true bash -s -- --install
-```
-
-4. 修改脚本后同步更新哈希文件：
-
-```bash
-shasum -a 256 pull-update-script.sh | awk '{print $1"  pull-update-script.sh"}' > pull-update-script.sh.sha256
-shasum -a 256 update_open-webui.sh | awk '{print $1"  update_open-webui.sh"}' > update_open-webui.sh.sha256
-```
-
 > 注意：`update_open-webui.sh` 会 `source .env`，请确保 `.env` 仅包含受信任内容。
 
 ## 恢复示例
